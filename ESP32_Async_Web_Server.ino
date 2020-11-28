@@ -1,0 +1,392 @@
+#include "libraries.h"
+#include "variables.h"
+#include "functions.h"
+
+// Create AsyncWebServer object on port 80
+AsyncWebServer server(80);
+LiquidCrystal_PCF8574 lcd;
+SPIClass spiSD(HSPI);
+RTC_DS3231 rtcDS;
+File sdFile;
+Button pushButton_1(PUSHBUTTON_1_PIN_1);
+Button pushButton_2(PUSHBUTTON_2_PIN_2);
+Button pushButton_3(PUSHBUTTON_3_PIN_3);
+
+void notFound(AsyncWebServerRequest *request)
+{
+  request->send(404, "text/plain", "Not found");
+}
+
+ESP32_FTPClient ftp (ftpserver, ftp_user, ftp_pass);
+void setup()
+{
+  Wire.begin(SDA_PIN, SCL_PIN);
+  lcd.begin(LCD_COLUMNS, LCD_ROWS, LCD_ADDRESS, BACKLIGHT);
+  lcd.clear();                          // Clear LCD screen.
+  //lcdI2C.selectLine(1);
+  delay(100);
+  lcd.setCursor(0, 0);
+  lcd.print("LAN: -SD: -RTC: ");                   // Print print String to LCD on first line
+  //lcdI2C.selectLine(2);                    // Set cursor at the begining of line 2
+  lcd.setCursor(0, 1);
+  lcd.print("SIM: -WIFI: -S:");                     // Print print String to LCD on second line
+  // Serial port for debugging purposes
+  Serial.begin(115200);
+  Serial1.begin(9600, SERIAL_8N1, RXD1_PIN, TXD1_PIN);
+  Serial2.begin(9600, SERIAL_8N1, RXD2_PIN, TXD2_PIN);
+  // Initialize SPIFFS
+  if (!SPIFFS.begin(true))
+  {
+    Serial.println("An Error has occurred while mounting SPIFFS");
+    return;
+  }
+  else {
+    //update data from SPIFFS
+    baud = readFile(SPIFFS, "/baud.txt");
+    data_bit = readFile(SPIFFS, "/data_bit.txt");
+    stop_bit = readFile(SPIFFS, "/stop_bit.txt");
+    parity = readFile(SPIFFS, "/parity.txt");
+    instrument = readFile(SPIFFS, "/instrument.txt");
+    ftp_server = readFile(SPIFFS, "/ftp_server.txt");
+    user1 = readFile(SPIFFS, "/user1.txt");
+    user2 = readFile(SPIFFS, "/user2.txt");
+    pass1 = readFile(SPIFFS, "/pass1.txt");
+    pass2 = readFile(SPIFFS, "/pass2.txt");
+    time_update_ftp = readFile(SPIFFS, "/time_update_ftp.txt");
+    time_update_sd = readFile(SPIFFS, "/time_update_sd.txt");
+  }
+  //// Access Point Mode
+  //  WiFi.softAP("ESP32-Access-Point", "123456789");
+  //  IPAddress IP = WiFi.softAPIP();
+  //  Serial.print("AP IP address: ");
+  //  Serial.println(IP);
+  // Connect to Wi-File  Wire.begin(SDA_PIN, SCL_PIN);
+  // initialize the lcd
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(1000);
+    Serial.println("Connecting to WiFi..");
+    lcd.setCursor(11, 1);
+    lcd.print("E");
+  }
+
+  // Print ESP32 Local IP Address
+  Serial.println(WiFi.localIP());
+  lcd.setCursor(11, 1);
+  lcd.print("A");
+  if (!MDNS.begin("esp32"))
+  {
+    Serial.println("Error starting mDNS");
+    return;
+  }
+
+  // Route for root / web page
+  lcd.setCursor(15, 1);
+  lcd.print("A");
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send(SPIFFS, "/index.html");
+  });
+  // Route to load style.css file
+  server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send(SPIFFS, "/style.css", "text/css");
+  });
+  server.on("/modbus", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send(SPIFFS, "/modbus.html", String(), false, processor);
+  });
+  server.on("/ftp", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send(SPIFFS, "/ftp.html", String(), false, processor);
+  });
+  server.on("/device", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send(SPIFFS, "/device.html", String(), false, processor);
+  });
+  server.on("/download", HTTP_GET, [](AsyncWebServerRequest * request) {
+    ftp.OpenConnection();
+    ftp.ChangeWorkDir("/");
+    download_ftp = "";
+    ftp.InitFile("Type A");
+    ftp.DownloadString("420ma.txt", download_ftp);
+    Serial.println("The file content is: ");
+    Serial.println(download_ftp);
+    //ftp.CloseConnection();
+    request->send(SPIFFS, "/download.html", String(), false, processor);
+  });
+  server.on("/show", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send(SPIFFS, "/show.html", String(), false, processor);
+  });
+  server.on("/download", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send(SPIFFS, "/download.html", String(), false, processor);
+  });
+  server.on("/settings", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send(SPIFFS, "/run.html", String(), false, processor);
+  });
+  // Send a GET request to /ftp-config?server=<server-id>&user1=<user1>&pass1=<pass1>&user2=<user2>&pass2=<pass2>&time=<time>
+  server.on("/modbus-config", HTTP_GET, [](AsyncWebServerRequest * request) {
+    if (request->hasParam("baud"))
+    {
+      baud = request->getParam("baud")->value();
+      writeFile(SPIFFS, "/baud.txt", baud.c_str());
+      Serial.print("Baud: ");
+      Serial.println(baud);
+    }
+    if (request->hasParam("data_bit"))
+    {
+      data_bit = request->getParam("data_bit")->value();
+      writeFile(SPIFFS, "/data_bit.txt", data_bit.c_str());
+      Serial.print("Bit data: ");
+      Serial.println(data_bit);
+    }
+    if (request->hasParam("stop_bit"))
+    {
+      stop_bit = request->getParam("stop_bit")->value();
+      writeFile(SPIFFS, "/stop_bit.txt", stop_bit.c_str());
+      Serial.print("Bit Stop: ");
+      Serial.println(stop_bit);
+    }
+    if (request->hasParam("parity"))
+    {
+      instrument = request->getParam("parity")->value();
+      writeFile(SPIFFS, "/parity.txt", parity.c_str());
+      Serial.print("Parity: ");
+      Serial.println(parity);
+    }
+    if (request->hasParam("instrument"))
+    {
+      instrument = request->getParam("instrument")->value();
+      writeFile(SPIFFS, "/instrument.txt", instrument.c_str());
+      Serial.print("instrument: ");
+      Serial.println(instrument);
+    }
+    request->send(SPIFFS, "/modbus.html", String(), false, processor);
+  });
+  // Send a GET request to /ftp-config?server=<server-id>&user1=<user1>&pass1=<pass1>&user2=<user2>&pass2=<pass2>&time=<time>
+  server.on("/ftp-config", HTTP_GET, [](AsyncWebServerRequest * request) {
+    if (request->hasParam("ftp_server"))
+    {
+      ftp_server = request->getParam("ftp_server")->value();
+      writeFile(SPIFFS, "/ftp_server.txt", ftp_server.c_str());
+      Serial.print("Server IP: ");
+      Serial.println(ftp_server);
+    }
+    if (request->hasParam("user1"))
+    {
+      user1 = request->getParam("user1")->value();
+      writeFile(SPIFFS, "/user1.txt", user1.c_str());
+      Serial.print("Username 1: ");
+      Serial.println(user1);
+    }
+    if (request->hasParam("pass1"))
+    {
+      pass1 = request->getParam("pass1")->value();
+      writeFile(SPIFFS, "/pass1.txt", pass1.c_str());
+      Serial.print("Password 1: ");
+      Serial.println(pass1);
+    }
+    if (request->hasParam("user2"))
+    {
+      instrument = request->getParam("user2")->value();
+      writeFile(SPIFFS, "/user2.txt", user2.c_str());
+      Serial.print("Username 2: ");
+      Serial.println(user2);
+    }
+    if (request->hasParam("pass2"))
+    {
+      pass2 = request->getParam("pass2")->value();
+      writeFile(SPIFFS, "/pass2.txt", pass2.c_str());
+      Serial.print("Password 2: ");
+      Serial.println(pass2);
+    }
+    if (request->hasParam("time_update_ftp"))
+    {
+      time_update_ftp = request->getParam("time_update_ftp")->value();
+      writeFile(SPIFFS, "/time_update_ftp.txt", time_update_ftp.c_str());
+      Serial.print("Update time FTP: ");
+      Serial.println(time_update_ftp);
+    }
+
+    request->send(SPIFFS, "/ftp.html", String(), false, processor);
+  });
+
+  //Route to device config
+  server.on("/device-config", HTTP_GET, [](AsyncWebServerRequest * request) {
+    if (request->hasParam("time_update_sd"))
+    {
+      time_update_sd = request->getParam("time_update_sd")->value();
+      writeFile(SPIFFS, "/time_update_sd.txt", time_update_sd.c_str());
+      Serial.print("Time update SD: ");
+      Serial.println(time_update_sd);
+    }
+    request->send(SPIFFS, "/device.html", String(), false, processor);
+  });
+  server.on("/setting", HTTP_GET, [](AsyncWebServerRequest * request) {
+    if (request->hasParam("run"))
+    {
+      isRun = request->getParam("run")->value();
+      //writeFile(SPIFFS, "/run.txt", isRun.c_str());
+      Serial.print("Run: ");
+      Serial.println(isRun);
+    }
+    if (request->hasParam("choose-user"))
+    {
+      choose_user = request->getParam("choose-user")->value();
+    }
+    request->send(200, "text/plain", "OK");
+  });
+  server.on("/sv", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send_P(200, "text/plain", sv.c_str());
+  });
+  server.on("/pv", HTTP_GET, [](AsyncWebServerRequest * request) {
+    request->send_P(200, "text/plain", pv.c_str());
+  });
+  // Start server
+  server.onNotFound(notFound);
+  server.begin();
+  //------------------------------------------
+  //  Wire.begin(SDA_PIN, SCL_PIN);
+  //  // initialize the lcd
+  //  lcdI2C.begin(LCD_COLUMNS, LCD_ROWS, LCD_ADDRESS, BACKLIGHT);
+  //  lcdI2C.clear();                          // Clear LCD screen.
+  //  lcd.setCursor(0, 0);
+  //  lcdI2C.print("LAN: -SD: -RTC: ");                   // Print print String to LCD on first line
+  //  //lcdI2C.selectLine(2);                    // Set cursor at the begining of line 2
+  //  lcd.setCursor(0, 1);
+  //  lcdI2C.print("SIM: -WIFI: ");                     // Print print String to LCD on second line
+
+  pushButton_1.init();
+  pushButton_2.init();
+  pushButton_3.init();
+  //RS3231
+  if (! rtcDS.begin()) {
+    Serial.println("Couldn't find RTC");
+    lcd.setCursor(15, 0);
+    lcd.print("E");
+  } else {
+    lcd.setCursor(15, 0);
+    lcd.print("A");
+  }
+  if (rtcDS.lostPower()) {
+    Serial.println("RTC lost power, lets set the time!");
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtcDS.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    // This line sets the RTC with an explicit date & time, for example to set
+    // January 21, 2014 at 3am you would call:
+    // rtcDS.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+  }
+  spiSD.begin(CLK_PIN, MISO_PIN, MOSI_PIN, SDFILE_PIN_CS); //CLK,MISO,MOIS,SS
+  pinMode(SDFILE_PIN_CS, OUTPUT);
+  if (!SD.begin(SDFILE_PIN_CS, spiSD)) {
+    Serial.println(F("Card failed, or not present"));
+    lcd.setCursor(9, 0);
+    lcd.print("E");
+  } else {
+    lcd.setCursor(9, 0);
+    lcd.print("A");
+  }
+}
+
+void loop()
+{
+  unsigned long currentMillis = millis();
+  interval_ftp = time_update_ftp.toInt() * 10000; //60000
+  interval_sd = time_update_sd.toInt() * 10000 + 1000;
+  if (isRun == "on") {
+    //upload file to server
+    if ((currentMillis - previousMillis_ftp >= interval_ftp) && (openFile == false)) {
+      openFile = true;
+      sdFile = SD.open("/420ma.txt", FILE_READ);
+      if (sdFile) {
+        String fileContent;
+        while (sdFile.available()) {
+          fileContent += String((char)sdFile.read());
+        }
+        sdFile.close();
+        Serial.println("READ FILE 420ma.txt:");
+        Serial.println(fileContent);
+        ftp.OpenConnection();
+        ftp.ChangeWorkDir("/");
+        ftp.InitFile("Type A");
+        ftp.NewFile("420ma.txt");
+        ftp.Write(fileContent.c_str());
+        ftp.CloseFile();
+        Serial.println("UPLOAD TO SERVER DONE");
+      } else {
+        Serial.println("error opening the 420ma.txt,UPLOAD FAIL");
+      }
+      previousMillis_ftp = currentMillis;
+      openFile = false;
+    }
+
+    else {
+      Serial.println("error opening the 420ma.txt,UPLOAD FAIL");
+    }
+    //write file to sd
+    if ((currentMillis - previousMillis_sd >= interval_sd) && (openFile == false)) {
+      //do something
+      openFile = true;
+      sdFile = SD.open("/420ma.txt", FILE_READ);
+      if (sdFile) {
+        fileContent = "";
+        while (sdFile.available()) {
+          fileContent += String((char)sdFile.read());
+        }
+        sdFile.close();
+      }
+      delay(100);
+      sdFile = SD.open("/420ma.txt", FILE_WRITE);
+      // if the file is available, write to it:
+      if (sdFile) {
+        DateTime now = rtcDS.now();
+        String upload_data;
+        upload_data = sv + "|" + pv + "|";
+        upload_data += now.hour();
+        upload_data += "|";
+        upload_data += now.minute();
+        upload_data += "|";
+        upload_data += now.day();
+        upload_data += "|";
+        upload_data += now.month();
+        upload_data += "|";
+        upload_data += now.year();
+        sdFile.print(fileContent);
+        sdFile.println(upload_data);
+        sdFile.close();
+        Serial.println("Write to sd:");
+        Serial.print(fileContent);
+        Serial.println(upload_data);
+      }    else {
+        // if the file didn't open, print an error
+        Serial.println(F("error opening file 420ma.txt, WRITE FAIL"));
+      }
+      previousMillis_sd = currentMillis;
+      openFile = false;
+    }
+    //SV
+    for (i = 0 ; i < 8 ; i++) {
+      Serial1.write(msg_sv[i]);
+    }
+    int a = 0;
+    while (Serial1.available())
+    {
+      ByteArray1[a] = Serial1.read();
+      a++;
+    }
+    int Data1;
+    Data1 = ByteArray1[3] * 256 + ByteArray1[4];
+    sv = String(Data1);
+    delay(100);
+    //PV
+    for (i = 0 ; i < 8 ; i++) {
+      Serial1.write(msg_pv[i]);
+    }
+    int c = 0;
+    while (Serial1.available())
+    {
+      ByteArray2[c] = Serial1.read();
+      c++;
+    }
+    int Data2;
+    Data2 = ByteArray2[3] * 256 + ByteArray2[4];
+    pv = String(Data2);
+    delay(100);
+  }
+}
