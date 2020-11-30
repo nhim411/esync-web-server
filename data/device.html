@@ -30,6 +30,10 @@
           <td>Update time</td>
           <td>%time_update_sd%</td>
         </tr>
+        <tr>
+          <td>SV Value</td>
+          <td>%set_sv%</td>
+        </tr>
       </table>
       <form action="device-config" method="get">
         <label for="time">Thời gian cập nhập file SD Card:</label>
@@ -40,6 +44,17 @@
           <option value="15">15 phút</option>
           <option value="20">20 phút</option>
         </select>
+        <br />
+        <label for="sv">Set SV Value (-200->1370):</label>
+        <input
+          type="number"
+          id="sv"
+          name="sv"
+          placeholder="-200->1370"
+          value="30"
+          min="-200"
+          max="1370"
+        /><br /><br />
         <br />
         <input type="submit" value="Submit" />
       </form>

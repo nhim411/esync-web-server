@@ -1,6 +1,3 @@
-// Code by JeeLabs http://news.jeelabs.org/code/
-// Released to the public domain! Enjoy!
-
 #ifndef _RTCLIB_H_
 #define _RTCLIB_H_
 

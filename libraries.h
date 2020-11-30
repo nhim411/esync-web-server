@@ -14,4 +14,4 @@
 #include "RTClib.h"
 #include <SD.h>
 #include <SPI.h>
-#include <ETH.h>
+#include "Ethernet.h"

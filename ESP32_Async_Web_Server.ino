@@ -17,7 +17,6 @@ void notFound(AsyncWebServerRequest *request)
   request->send(404, "text/plain", "Not found");
 }
 
-ESP32_FTPClient ftp (ftpserver, ftp_user, ftp_pass);
 void setup()
 {
   Wire.begin(SDA_PIN, SCL_PIN);
@@ -47,6 +46,7 @@ void setup()
     stop_bit = readFile(SPIFFS, "/stop_bit.txt");
     parity = readFile(SPIFFS, "/parity.txt");
     instrument = readFile(SPIFFS, "/instrument.txt");
+    set_sv = readFile(SPIFFS, "/set_sv.txt");
     ftp_server = readFile(SPIFFS, "/ftp_server.txt");
     user1 = readFile(SPIFFS, "/user1.txt");
     user2 = readFile(SPIFFS, "/user2.txt");
@@ -54,6 +54,7 @@ void setup()
     pass2 = readFile(SPIFFS, "/pass2.txt");
     time_update_ftp = readFile(SPIFFS, "/time_update_ftp.txt");
     time_update_sd = readFile(SPIFFS, "/time_update_sd.txt");
+    set_sv = readFile(SPIFFS, "/set_sv.txt");
   }
   //// Access Point Mode
   //  WiFi.softAP("ESP32-Access-Point", "123456789");
@@ -63,18 +64,32 @@ void setup()
   // Connect to Wi-File  Wire.begin(SDA_PIN, SCL_PIN);
   // initialize the lcd
   WiFi.begin(ssid, password);
+  Serial.println("Connecting to WiFi..");
+  uint32_t t = millis();
   while (WiFi.status() != WL_CONNECTED)
   {
-    delay(1000);
-    Serial.println("Connecting to WiFi..");
+    delay(500);
+    Serial.print(".");
     lcd.setCursor(11, 1);
     lcd.print("E");
+    bool justOne = false;
+    if ( ((millis() - t) > 5000) && (justOne == false) )  //if not connect try connect LAN
+    {
+      justOne = true;
+      Serial.println("Retry");
+      WiFi.mode(WIFI_OFF);        //stop wifi
+      initEthernet();
+      lcd.setCursor(4, 0);
+      lcd.print("A");
+      break;
+    }
   }
-
-  // Print ESP32 Local IP Address
-  Serial.println(WiFi.localIP());
-  lcd.setCursor(11, 1);
-  lcd.print("A");
+  if (WiFi.status() == WL_CONNECTED) {
+    // Print ESP32 Local IP Address
+    Serial.println(WiFi.localIP());
+    lcd.setCursor(11, 1);
+    lcd.print("A");
+  }
   if (!MDNS.begin("esp32"))
   {
     Serial.println("Error starting mDNS");
@@ -101,6 +116,27 @@ void setup()
     request->send(SPIFFS, "/device.html", String(), false, processor);
   });
   server.on("/download", HTTP_GET, [](AsyncWebServerRequest * request) {
+    String user, pass;
+    if (choose_user == "1") {
+      user = user1;
+      pass = pass1;
+    } else {
+      user = user2;
+      pass = pass2;
+    }
+    //update server
+    int ftp_len = ftp_server.length() + 1;
+    char ftp_array[ftp_len];
+    ftp_server.toCharArray(ftp_array, ftp_len);
+    //update user
+    int user_len = user.length() + 1;
+    char user_array[user_len];
+    user.toCharArray(user_array, user_len);
+    //update pass
+    int pass_len = pass.length() + 1;
+    char pass_array[pass_len];
+    pass.toCharArray(pass_array, pass_len);
+    ESP32_FTPClient ftp (ftp_array, user_array, pass_array);
     ftp.OpenConnection();
     ftp.ChangeWorkDir("/");
     download_ftp = "";
@@ -108,7 +144,7 @@ void setup()
     ftp.DownloadString("420ma.txt", download_ftp);
     Serial.println("The file content is: ");
     Serial.println(download_ftp);
-    //ftp.CloseConnection();
+    ftp.CloseConnection();
     request->send(SPIFFS, "/download.html", String(), false, processor);
   });
   server.on("/show", HTTP_GET, [](AsyncWebServerRequest * request) {
@@ -119,6 +155,9 @@ void setup()
   });
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest * request) {
     request->send(SPIFFS, "/run.html", String(), false, processor);
+  });
+  server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest * request) {
+    ESP.restart();
   });
   // Send a GET request to /ftp-config?server=<server-id>&user1=<user1>&pass1=<pass1>&user2=<user2>&pass2=<pass2>&time=<time>
   server.on("/modbus-config", HTTP_GET, [](AsyncWebServerRequest * request) {
@@ -157,13 +196,20 @@ void setup()
       Serial.print("instrument: ");
       Serial.println(instrument);
     }
+    if (request->hasParam("set_sv"))
+    {
+      instrument = request->getParam("set_sv")->value();
+      writeFile(SPIFFS, "/set_sv.txt", set_sv.c_str());
+      Serial.print("Set SV Value: ");
+      Serial.println(set_sv);
+    }
     request->send(SPIFFS, "/modbus.html", String(), false, processor);
   });
   // Send a GET request to /ftp-config?server=<server-id>&user1=<user1>&pass1=<pass1>&user2=<user2>&pass2=<pass2>&time=<time>
   server.on("/ftp-config", HTTP_GET, [](AsyncWebServerRequest * request) {
-    if (request->hasParam("ftp_server"))
+    if (request->hasParam("server"))
     {
-      ftp_server = request->getParam("ftp_server")->value();
+      ftp_server = request->getParam("server")->value();
       writeFile(SPIFFS, "/ftp_server.txt", ftp_server.c_str());
       Serial.print("Server IP: ");
       Serial.println(ftp_server);
@@ -216,8 +262,18 @@ void setup()
       Serial.print("Time update SD: ");
       Serial.println(time_update_sd);
     }
-    request->send(SPIFFS, "/device.html", String(), false, processor);
+    if (request->hasParam("sv"))
+    {
+      set_sv = request->getParam("sv")->value();
+      writeFile(SPIFFS, "/set_sv.txt", set_sv.c_str());
+      Serial.print("Set SV value: ");
+      Serial.println(set_sv);// response: 01 03 02 00 1c b9 8d
+      setDone = true;
+      request->send(SPIFFS, "/device.html", String(), false, processor);
+      //01 06 0001 0258 D890 set 600 do
+    }
   });
+
   server.on("/setting", HTTP_GET, [](AsyncWebServerRequest * request) {
     if (request->hasParam("run"))
     {
@@ -301,13 +357,33 @@ void loop()
         }
         sdFile.close();
         Serial.println("READ FILE 420ma.txt:");
-        Serial.println(fileContent);
-        ftp.OpenConnection();
+        Serial.println(fileContent);    String user, pass;
+        if (choose_user == "1") {
+          user = user1;
+          pass = pass1;
+        } else {
+          user = user2;
+          pass = pass2;
+        }
+        //update server
+        int ftp_len = ftp_server.length() + 1;
+        char ftp_array[ftp_len];
+        ftp_server.toCharArray(ftp_array, ftp_len);
+        //update user
+        int user_len = user.length() + 1;
+        char user_array[user_len];
+        user.toCharArray(user_array, user_len);
+        //update pass
+        int pass_len = pass.length() + 1;
+        char pass_array[pass_len];
+        pass.toCharArray(pass_array, pass_len);
+        ESP32_FTPClient ftp (ftp_array, user_array, pass_array);
         ftp.ChangeWorkDir("/");
         ftp.InitFile("Type A");
         ftp.NewFile("420ma.txt");
         ftp.Write(fileContent.c_str());
         ftp.CloseFile();
+        ftp.OpenConnection();
         Serial.println("UPLOAD TO SERVER DONE");
       } else {
         Serial.println("error opening the 420ma.txt,UPLOAD FAIL");
@@ -388,5 +464,23 @@ void loop()
     Data2 = ByteArray2[3] * 256 + ByteArray2[4];
     pv = String(Data2);
     delay(100);
+  }
+  if (setDone == true) {
+    setDone = false;
+    String set_sv_hex = decToHex(set_sv.toInt());
+    msg_set_sv[4] = StrtoByte(set_sv_hex.substring(0, 2));
+    msg_set_sv[5] = StrtoByte(set_sv_hex.substring(2, 4));
+
+    String msg_sv_string = "01060001";
+    msg_sv_string = msg_sv_string + set_sv_hex;
+    String calculated_crc = ModRTU_CRC(msg_sv_string);
+    msg_set_sv[6] = StrtoByte(calculated_crc.substring(0, 2));
+    msg_set_sv[7] = StrtoByte(calculated_crc.substring(2, 4));
+    msg_sv_string = msg_sv_string + calculated_crc;
+    Serial.print("Set sv value massage:");
+    Serial.println(msg_sv_string);
+    for (int i = 0 ; i < 8; i++) {
+      Serial1.write(msg_set_sv[i]);
+    }
   }
 }
