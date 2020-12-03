@@ -296,6 +296,7 @@ void setup()
   });
   // Start server
   server.onNotFound(notFound);
+  AsyncElegantOTA.begin(&server);    // Start ElegantOTA
   server.begin();
   //------------------------------------------
   //  Wire.begin(SDA_PIN, SCL_PIN);
@@ -342,6 +343,7 @@ void setup()
 
 void loop()
 {
+  AsyncElegantOTA.loop();
   unsigned long currentMillis = millis();
   interval_ftp = time_update_ftp.toInt() * 10000; //60000
   interval_sd = time_update_sd.toInt() * 10000 + 1000;

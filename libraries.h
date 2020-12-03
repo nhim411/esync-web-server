@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
+#include <AsyncElegantOTA.h>
 #include <ESP32_FTPClient.h>
 #include "ESPAsyncWebServer.h"
 #include <AsyncTCP.h>
