@@ -28,7 +28,7 @@ void setup()
   lcd.print("LAN: -SD: -RTC: ");                   // Print print String to LCD on first line
   //lcdI2C.selectLine(2);                    // Set cursor at the begining of line 2
   lcd.setCursor(0, 1);
-  lcd.print("SIM: -WIFI: -S:");                     // Print print String to LCD on second line
+  lcd.print("SIM: -WIFI: -W:");                     // Print print String to LCD on second line
   // Serial port for debugging purposes
   Serial.begin(115200);
   Serial1.begin(9600, SERIAL_8N1, RXD1_PIN, TXD1_PIN);
@@ -359,7 +359,8 @@ void loop()
         }
         sdFile.close();
         Serial.println("READ FILE 420ma.txt:");
-        Serial.println(fileContent);    String user, pass;
+        Serial.println(fileContent);
+        String user, pass;
         if (choose_user == "1") {
           user = user1;
           pass = pass1;
@@ -380,12 +381,13 @@ void loop()
         char pass_array[pass_len];
         pass.toCharArray(pass_array, pass_len);
         ESP32_FTPClient ftp (ftp_array, user_array, pass_array);
+        ftp.OpenConnection();
         ftp.ChangeWorkDir("/");
         ftp.InitFile("Type A");
         ftp.NewFile("420ma.txt");
         ftp.Write(fileContent.c_str());
         ftp.CloseFile();
-        ftp.OpenConnection();
+        ftp.CloseConnection();
         Serial.println("UPLOAD TO SERVER DONE");
       } else {
         Serial.println("error opening the 420ma.txt,UPLOAD FAIL");
